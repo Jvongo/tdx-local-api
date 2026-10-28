@@ -70,6 +70,33 @@ uvicorn tdx_service.main:app --host 127.0.0.1 --port 8000
 TDX_HOME=E:/tdx TDX_PORT=9000 python run.py
 ```
 
+### 4.3 Docker 部署
+
+前置条件：本机已安装 Docker（Docker Desktop 或 Docker Engine，含 compose 插件）。
+
+```bash
+docker compose up -d --build
+```
+
+一行命令完成构建与启动。要点：
+
+- **端口映射**：宿主机 `8010` → 容器 `8000`（8010 是为避开本机已被其他服务占用的 8000，可在 `docker-compose.yml` 中自行修改）
+- **数据挂载**：宿主机 `D:/new_tdx` 以**只读**方式挂载到容器 `/data`（服务只读行情文件，客户端盘后写盘不受影响）
+- **访问验证**：<http://127.0.0.1:8010/api/v1/health>，交互式文档 <http://127.0.0.1:8010/docs>
+
+常用运维命令：
+
+```bash
+docker compose ps        # 查看状态（含健康检查结果）
+docker compose logs -f   # 跟踪日志
+docker compose restart   # 重启
+docker compose down      # 停止并移除容器
+```
+
+更换行情数据目录：修改 `docker-compose.yml` 中 `volumes` 的宿主机路径即可（Windows 路径用正斜杠，如 `E:/tdx:/data:ro`）。
+
+镜像说明：基于 `python:3.13-slim`，依赖来源为 `requirements.txt`（含测试依赖，保证单一事实来源）；pip 使用清华源加速，海外网络可删除 `Dockerfile` 中的 `PIP_INDEX_URL` 行。容器内 `TDX_HOST=0.0.0.0` 为必需（否则仅容器内可访问）。
+
 ## 5. 配置说明
 
 配置由 `tdx_service/config.py` 的 `Settings` 管理：启动时经 `Settings.from_env()` 从环境变量读取，缺省用默认值；非数字型配置错误直接 fail-fast（启动期立即失败，不带病运行）。`vipdoc` 目录缺失不阻断启动，仅记录告警，`/health` 返回 503。
@@ -125,6 +152,9 @@ pytest tests/ -v
 selectProductTool/
 ├── run.py                     # 启动入口（读环境变量，uvicorn 运行）
 ├── requirements.txt           # 依赖清单
+├── Dockerfile                 # 容器镜像定义（python:3.13-slim）
+├── docker-compose.yml         # 本地 Docker 部署（端口 8010、数据只读挂载）
+├── .dockerignore              # 构建上下文排除项
 ├── tdx_service/               # 服务源码
 │   ├── __init__.py
 │   ├── config.py              # Settings 配置（环境变量 + 默认值）
@@ -170,4 +200,4 @@ selectProductTool/
 | `develop` | 集成分支，所有功能在此汇合，保持可发布状态 |
 | `feature/*` | 功能分支（如 `feature/day-parser`、`feature/cache-repository`、`feature-api`），从 `develop` 切出，完成后 `--no-ff` 合回 |
 
-历史发布：`v1.0.0`（首个发布版本，通达信本地行情数据服务）。
+历史发布：`v1.0.0`（首个发布版本，通达信本地行情数据服务）；`v1.1.0`（Docker 本地部署支持）。
