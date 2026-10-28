@@ -3,7 +3,7 @@
 services:
   tdx-api:
     build: .
-    image: tdx-local-api:1.1.0
+    image: tdx-local-api:1.2.0
     container_name: tdx-local-api
     ports:
       # 宿主机端口:容器端口（8010 避开本机已被占用的 8000）
