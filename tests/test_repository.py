@@ -161,6 +161,83 @@ class TestSystemInfo:
         assert info.data_from == "2024-01-02"
         assert info.data_to == "2024-01-10"
 
+    def test_system_info_ttl_cache(self, repo, monkeypatch):
+        """TTL 内重复 system_info 不重复读文件边缘（全量读取约秒级，必须缓存）。"""
+        calls = []
+        original = SecurityRepository._read_edge_records
+
+        def counting(path):
+            calls.append(path)
+            return original(path)
+
+        monkeypatch.setattr(SecurityRepository, "_read_edge_records", staticmethod(counting))
+
+        repo.system_info()
+        calls_after_first = len(calls)
+        repo.system_info()
+
+        assert calls_after_first == 3  # 首次数 3 个文件
+        assert len(calls) == calls_after_first, "system_info 未按 TTL 缓存，每次全量重读"
+
+    def test_system_info_single_flight(self, repo, monkeypatch):
+        """TTL 过期后多线程并发只触发一次全量重算（单飞，防缓存击穿雪崩）。"""
+        import threading
+        import time as _time
+
+        calls = []
+        original = SecurityRepository._read_edge_records
+
+        def slow_read(path):
+            calls.append(path)
+            _time.sleep(0.05)
+            return original(path)
+
+        monkeypatch.setattr(SecurityRepository, "_read_edge_records", staticmethod(slow_read))
+
+        repo.system_info()
+        calls.clear()
+        # 手工将缓存时间戳置为 31 秒前，模拟 TTL 过期
+        ts, info = repo._system_info_cache
+        repo._system_info_cache = (ts - 31, info)
+
+        barrier = threading.Barrier(2)
+
+        def worker():
+            barrier.wait()
+            repo.system_info()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(calls) == 3, f"全量重算被触发 {len(calls) // 3} 次，发生缓存击穿"
+
+
+class TestEdgeRecordsRobustness:
+    """_read_edge_records 边界文件健壮性测试。"""
+
+    def test_tiny_file_returns_none_not_raise(self, tmp_path):
+        """1-31 字节残缺文件：返回 (None, None) 而非抛 DataFileError（与解析器截断行为一致）。"""
+        repo = SecurityRepository(Settings(tdx_home=str(tmp_path)))
+        f = tmp_path / "vipdoc" / "sh" / "lday" / "sh600000.day"
+        f.parent.mkdir(parents=True)
+        f.write_bytes(b"\x01" * 10)  # 不足一条完整记录的残缺文件
+
+        first, last = repo._read_edge_records(f)
+
+        assert first is None
+        assert last is None
+
+    def test_empty_file_returns_none(self, tmp_path):
+        """空文件：返回 (None, None)。"""
+        repo = SecurityRepository(Settings(tdx_home=str(tmp_path)))
+        f = tmp_path / "sh600000.day"
+        f.write_bytes(b"")
+
+        assert repo._read_edge_records(f) == (None, None)
+
 
 class TestCacheIntegration:
     """仓库与 BarCache 的集成测试。"""

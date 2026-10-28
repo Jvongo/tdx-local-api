@@ -1,6 +1,7 @@
 """数据仓库：扫描 vipdoc 目录，提供证券定位、日线查询、列表与系统信息。"""
 import os
 import re
+import threading
 import time
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
@@ -52,6 +53,8 @@ class SecurityRepository:
         self._settings = settings
         self._cache = cache if cache is not None else BarCache(maxsize=settings.cache_size)
         self._entries_cache = None  # (时间戳, entries)
+        self._system_info_cache = None  # (时间戳, SystemInfo)
+        self._system_info_lock = threading.Lock()  # system_info 重算单飞锁，防缓存击穿
 
     def _entries(self) -> list[SecurityEntry]:
         """扫描 vipdoc/{sh,sz,bj}/lday/*.day，结果按 settings.list_ttl 秒 TTL 缓存。"""
@@ -125,13 +128,18 @@ class SecurityRepository:
 
     @staticmethod
     def _read_edge_records(path: Path) -> tuple[DayRecord | None, DayRecord | None]:
-        """仅读文件首末各 32 字节解析首末记录，日期非法或空文件对应返回 None。"""
+        """仅读文件首末各 32 字节解析首末记录，日期非法或空文件对应返回 None。
+
+        不足一条完整记录的残缺文件（0~31 字节）返回 (None, None)，
+        与 TdxDayReader 丢弃残缺尾部的行为保持一致，不抛异常。
+        """
         try:
+            size = os.path.getsize(path)
+            if size == 0:
+                return None, None
             with open(path, "rb") as fh:
                 head = fh.read(TdxDayReader.RECORD_SIZE)
-                if not head:
-                    return None, None
-                fh.seek(-TdxDayReader.RECORD_SIZE, os.SEEK_END)
+                fh.seek(max(0, size - TdxDayReader.RECORD_SIZE))
                 tail = fh.read(TdxDayReader.RECORD_SIZE)
         except OSError as exc:
             raise DataFileError(f"日线文件读取失败: {path}, {exc}") from exc
@@ -179,23 +187,41 @@ class SecurityRepository:
         return infos, total
 
     def system_info(self) -> SystemInfo:
-        """系统信息：各市场文件数、证券总数、全局 data_from/to 与缓存文件数。"""
-        entries = self._entries()
-        markets = {m: 0 for m in self._settings.markets()}
-        data_from = None
-        data_to = None
-        for entry in entries:
-            markets[entry.market] += 1
-            first, last = self._read_edge_records(entry.path)
-            if first is not None:
-                data_from = first.date if data_from is None else min(data_from, first.date)
-            if last is not None:
-                data_to = last.date if data_to is None else max(data_to, last.date)
-        return SystemInfo(
-            tdx_home=self._settings.tdx_home,
-            markets=markets,
-            total_securities=len(entries),
-            data_from=_fmt_date(data_from) if data_from is not None else None,
-            data_to=_fmt_date(data_to) if data_to is not None else None,
-            cached_files=len(self._cache),
-        )
+        """系统信息：各市场文件数、证券总数、全局 data_from/to 与缓存文件数。
+
+        全量边缘读取约万级文件 IO（实测约 5 秒），结果按 settings.list_ttl 秒缓存；
+        TTL 过期重算采用单飞锁：并发请求只触发一次全量重算，其余等待后复用新缓存，
+        防止多线程同时重算造成 IO 争抢雪崩（QA-2 开环压测实测）。
+        """
+        now = time.monotonic()
+        if self._system_info_cache is not None:
+            ts, info = self._system_info_cache
+            if now - ts < self._settings.list_ttl:
+                return info
+        with self._system_info_lock:
+            now = time.monotonic()  # 等锁期间可能已被其他线程刷新，重新校验
+            if self._system_info_cache is not None:
+                ts, info = self._system_info_cache
+                if now - ts < self._settings.list_ttl:
+                    return info
+            entries = self._entries()
+            markets = {m: 0 for m in self._settings.markets()}
+            data_from = None
+            data_to = None
+            for entry in entries:
+                markets[entry.market] += 1
+                first, last = self._read_edge_records(entry.path)
+                if first is not None:
+                    data_from = first.date if data_from is None else min(data_from, first.date)
+                if last is not None:
+                    data_to = last.date if data_to is None else max(data_to, last.date)
+            info = SystemInfo(
+                tdx_home=self._settings.tdx_home,
+                markets=markets,
+                total_securities=len(entries),
+                data_from=_fmt_date(data_from) if data_from is not None else None,
+                data_to=_fmt_date(data_to) if data_to is not None else None,
+                cached_files=len(self._cache),
+            )
+            self._system_info_cache = (now, info)
+            return info

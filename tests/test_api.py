@@ -175,6 +175,52 @@ class TestDailyKline:
         assert resp.json()["data"]["date"] == "2026-01-09"
 
 
+class TestCrossRequestCache:
+    """跨请求缓存复用测试（QA-2 压测暴露：override 每次请求构造新仓库导致双层缓存失效）。"""
+
+    def test_repository_reused_across_requests(self, make_client, monkeypatch):
+        """同一 app 连续两请求只解析一次文件：BarCache 必须跨请求复用。"""
+        from tdx_service.parser import TdxDayReader
+
+        client = make_client(SPEC)
+        calls = []
+        original = TdxDayReader.read_file
+
+        def counting_read_file(self, path):
+            calls.append(path)
+            return original(self, path)
+
+        monkeypatch.setattr(TdxDayReader, "read_file", counting_read_file)
+
+        r1 = client.get("/api/v1/kline/daily", params={"code": "600000"})
+        r2 = client.get("/api/v1/kline/daily", params={"code": "600000"})
+
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert len(calls) == 1, f"read_file 被调用 {len(calls)} 次，BarCache 未跨请求复用"
+
+    def test_entries_scan_ttl_across_requests(self, make_client, monkeypatch):
+        """TTL 内连续两请求不重复扫描目录：_entries 缓存必须跨请求复用。"""
+        import tdx_service.repository as repo_mod
+
+        client = make_client(SPEC)
+        globs = []
+        original_glob = repo_mod.Path.glob
+
+        def counting_glob(self, pattern):
+            globs.append(str(self))
+            return original_glob(self, pattern)
+
+        monkeypatch.setattr(repo_mod.Path, "glob", counting_glob)
+
+        r1 = client.get("/api/v1/securities", params={"market": "sh"})
+        globs_after_first = len(globs)
+        r2 = client.get("/api/v1/securities", params={"market": "sh"})
+
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert globs_after_first == 3  # 首请求扫描 sh/sz/bj 三市场
+        assert len(globs) == globs_after_first, "第二次请求重复扫描目录，TTL 缓存未跨请求复用"
+
+
 class TestEnvelope:
     """统一响应结构测试。"""
 

@@ -28,8 +28,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings if settings is not None else get_settings()
     app = FastAPI(title="TDX本地行情服务", version="1.0.0")
-    # 用显式配置覆盖依赖单例，保证测试与多实例场景数据根正确
-    app.dependency_overrides[get_repository] = lambda: SecurityRepository(settings)
+    # 仓库进程内单例：BarCache 与目录扫描 TTL 缓存跨请求复用；
+    # 若每次请求新建仓库，两层缓存全部失效（QA-2 压测实测热查询无加速）
+    repository = SecurityRepository(settings)
+    app.dependency_overrides[get_repository] = lambda: repository
 
     @app.exception_handler(AppError)
     async def app_error_handler(_: Request, exc: AppError):
