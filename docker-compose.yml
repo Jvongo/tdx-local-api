@@ -1,0 +1,20 @@
+# 通达信本地行情服务：本地 Docker 部署
+# 用法：docker compose up -d --build
+services:
+  tdx-api:
+    build: .
+    image: tdx-local-api:1.1.0
+    container_name: tdx-local-api
+    ports:
+      # 宿主机端口:容器端口（8010 避开本机已被占用的 8000）
+      - "8010:8000"
+    environment:
+      - TDX_HOME=/data       # 容器内行情数据路径（对应下方卷挂载）
+      - TDX_HOST=0.0.0.0     # 容器内必须监听所有网卡
+      - TDX_PORT=8000
+      - TDX_CACHE_SIZE=512   # K线文件LRU缓存份数
+      - TDX_LIST_TTL=30      # 证券列表缓存秒数
+    volumes:
+      # Windows 路径用正斜杠；通达信安装目录只读挂载（服务只读行情文件）
+      - D:/new_tdx:/data:ro
+    restart: unless-stopped

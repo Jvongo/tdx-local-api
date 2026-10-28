@@ -1,0 +1,13 @@
+# Docker 构建忽略：测试、文档与本地产物不进入镜像上下文
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+*.md
+.workbuddy/
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml
