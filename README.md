@@ -52,7 +52,7 @@ python run.py
 uvicorn tdx_service.main:app --host 127.0.0.1 --port 8000
 ```
 
-启动后访问 <http://127.0.0.1:8000/api/v1/health> 验证；交互式 OpenAPI 文档见 `/docs`。
+启动后访问 <http://127.0.0.1:8000/api/v1/health> 验证；交互式 **Swagger 文档**见 `/docs`（浏览器访问根路径 `/` 自动跳转），备用 ReDoc 风格见 `/redoc`。
 
 ### 4.2 环境变量
 
@@ -82,7 +82,7 @@ docker compose up -d --build
 
 - **端口映射**：宿主机 `8010` → 容器 `8000`（8010 是为避开本机已被其他服务占用的 8000，可在 `docker-compose.yml` 中自行修改）
 - **数据挂载**：宿主机 `D:/new_tdx` 以**只读**方式挂载到容器 `/data`（服务只读行情文件，客户端盘后写盘不受影响）
-- **访问验证**：<http://127.0.0.1:8010/api/v1/health>，交互式文档 <http://127.0.0.1:8010/docs>
+- **访问验证**：<http://127.0.0.1:8010/api/v1/health>，交互式 Swagger 文档 <http://127.0.0.1:8010/docs>（根路径 `/` 自动跳转）
 
 常用运维命令：
 
@@ -114,7 +114,7 @@ Base URL：`http://127.0.0.1:8000`；所有响应为统一信封 `{"code","messa
 | GET | `/api/v1/kline/daily` | 日线查询（日期区间 + 分页） |
 | GET | `/api/v1/kline/daily/latest` | 最新一根日线 |
 
-各接口的完整参数、返回结构、错误码与调用示例见 **[API_DOC.md](API_DOC.md)**。
+各接口的完整参数、返回结构、错误码与调用示例见 **[API_DOC.md](API_DOC.md)**；交互式调试推荐使用内置 Swagger UI（`/docs`，支持在线发起请求）。
 
 ## 7. 数据格式说明
 
